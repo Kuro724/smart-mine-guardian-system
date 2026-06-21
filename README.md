@@ -150,12 +150,5 @@ Training notebooks/scripts for each are in the `Source Code/*.txt` guides — re
 - 🔁 **Bidirectional SOS** — worker SOS → gateway → dashboard; supervisor evacuate → gateway → wearable.
 - 🎥 **Dual-camera PPE** — entrance gate *access control* + tunnel-zone *violation flagging*.
 
-## Status & roadmap
-
-- ✅ Prototype validated in the lab (TRL-5). Manuscript in preparation.
-- 🔜 Field testing under simulated mine conditions, low-light/dust robustness, predictive analytics, patent filing.
-
-## License
-
-Released for academic and research use. The PPE-detection model builds on the [Eagle-eyes](https://github.com/83Gh0st/Eagle-eyes) project (MIT) — see the separate `eagle-eyes-ppe-detection` repo.
+sub.com/83Gh0st/Eagle-eyes) project (MIT) — see the separate `eagle-eyes-ppe-detection` repo.
 

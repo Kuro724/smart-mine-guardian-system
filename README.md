@@ -63,7 +63,6 @@ smart-mine-guardian-system/
 │   └── rfidyolo/rfidyolo.ino         # RFID reader → YOLO server
 │
 └── docs/
-    ├── Project_Closure_Report.pdf    # Full 19-page project report (TEXMiN CoE)
     ├── Project_Guardian_Arduino_Manual.docx
     └── Project_Guardian_Lab_Manual.docx
 ```

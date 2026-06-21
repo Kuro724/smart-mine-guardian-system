@@ -160,6 +160,3 @@ Training notebooks/scripts for each are in the `Source Code/*.txt` guides — re
 
 Released for academic and research use. The PPE-detection model builds on the [Eagle-eyes](https://github.com/83Gh0st/Eagle-eyes) project (MIT) — see the separate `eagle-eyes-ppe-detection` repo.
 
-## Acknowledgements
-
-Mentored by **Dr. Daijiry Narzary**, with support from **Dr. M. Prakash** (HoD, EIE), **Dr. P. Chinnamuthu** and **Mr. Karthikeyan** (TEXMiN CPS CoE), NIT Nagaland.

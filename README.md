@@ -2,7 +2,7 @@
 
 > An edge-enabled **Cyber-Physical System (CPS)** for IIoT-based underground mine safety — real-time environmental monitoring, AI hazard detection, multi-camera PPE compliance, LoRa worker alerts, and a supervisor mobile app.
 
-Developed under the **TEXMiN Mining CPS Centre of Excellence** fellowship at **NIT Nagaland** (Project Ref: `TEXMiN-CoE/UG-PG-Fellowship/2025/09-005`). Lab prototype validated at **TRL-5**.
+
 
 ## Overview
 

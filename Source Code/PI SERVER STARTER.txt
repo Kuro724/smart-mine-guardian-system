@@ -1,0 +1,33 @@
+from flask import Flask
+import os
+
+app = Flask(__name__)
+
+@app.route('/start-sensors', methods=['GET'])
+def start_sensors():
+    try:
+        # We use standard Linux backgrounding (&) and route the logs exactly like your bash script did
+        os.system("sudo python3 /home/peniel/pySX127x/receiver1.py > /home/peniel/startup_log.txt 2>&1 &")
+        os.system("sudo python3 /home/peniel/Downloads/Mine/mine_monitor1.py >> /home/peniel/startup_log.txt 2>&1 &")
+        
+        # Start Ngrok silently in the background using Linux routing
+        os.system("ngrok http 5001 > /dev/null 2>&1 &")
+        
+        return "Raspberry Pi Sensors and Ngrok Started!", 200
+    except Exception as e:
+        return f"Failed to start: {str(e)}", 500
+
+@app.route('/stop-sensors', methods=['GET'])
+def stop_sensors():
+    try:
+        # Added 'sudo' to ensure it has permission to kill them
+        os.system("sudo pkill -f receiver1.py")
+        os.system("sudo pkill -f mine_monitor1.py")
+        os.system("sudo killall ngrok")
+        
+        return "Raspberry Pi Sensors and Ngrok Stopped!", 200
+    except Exception as e:
+        return f"Failed to stop: {str(e)}", 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=9000)

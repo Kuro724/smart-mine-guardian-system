@@ -1,0 +1,35 @@
+from flask import Flask
+import subprocess
+import os
+
+app = Flask(__name__)
+
+@app.route('/start-yolo', methods=['GET'])
+def start_yolo():
+    try:
+        yolo_dir = r"D:\Game Installer\Eagle-eyes-main\predictions\Model\weights"
+        
+        # Start YOLO in a visible window
+        subprocess.Popen('start "YOLO_SERVER" py -3.10 app.py', cwd=yolo_dir, shell=True)
+        
+        # Start Ngrok in a visible window using your exact path
+        ngrok_cmd = r'start "NGROK_SERVER" "D:\Game Installer\ngrok-v3-stable-windows-amd64\ngrok.exe" http 5000'
+        subprocess.Popen(ngrok_cmd, shell=True)
+        
+        return "YOLO Server and Ngrok Started!", 200
+    except Exception as e:
+        return f"Failed to start YOLO: {str(e)}", 500
+
+@app.route('/stop-yolo', methods=['GET'])
+def stop_yolo():
+    try:
+        # Kill the YOLO window
+        os.system('taskkill /F /FI "WINDOWTITLE eq YOLO_SERVER*" /T')
+        # Kill the Ngrok window
+        os.system('taskkill /F /FI "WINDOWTITLE eq NGROK_SERVER*" /T')
+        return "YOLO Server and Ngrok Stopped!", 200
+    except Exception as e:
+        return f"Failed to stop: {str(e)}", 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=9001)

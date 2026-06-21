@@ -1,0 +1,83 @@
+# ============================================================
+# Smart Mine Guardian System — .gitignore
+# Covers: Android (Kotlin), Python edge/YOLO servers, Arduino
+# ============================================================
+
+# ---------- Secrets / environment ----------
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+
+# ---------- Android / Gradle ----------
+**/build/
+**/out/
+.gradle/
+gradle/.gradle/
+local.properties
+captures/
+.cxx/
+
+# ---------- Kotlin / Java ----------
+*.class
+*.iml
+*.ipr
+*.iws
+.idea/
+*.apk
+*.aab
+*.ap_
+*.dex
+bin/
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---------- Runtime databases / logs ----------
+*.log
+*.sqlite
+*.sqlite3
+# SQLite telemetry log (auto-created on first run)
+edge-server/guardian_history.db
+edge-server/*.db-journal
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+
+# ---------- OS junk ----------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ============================================================
+# NOTE — large binary assets (DECIDE PER FILE)
+# ============================================================
+# The following are large but REQUIRED to run. Keep them with Git LFS
+# (https://git-lfs.com) instead of committing raw into git:
+#
+#   edge-server/*.pkl                       (trained sklearn models)
+#   yolo-server/best.pt                     (YOLOv5 weights)
+#   yolo-server/yolov5/                     (YOLOv5 source clone)
+#
+# Track with LFS once, e.g.:
+#   git lfs install
+#   git lfs track "*.pkl" "*.pt"
+#   git add .gitattributes
+# If you'd rather not version them at all, uncomment the lines below:
+#
+# *.pkl
+# *.pt
+# yolo-server/yolov5/

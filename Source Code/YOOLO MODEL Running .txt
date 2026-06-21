@@ -1,0 +1,337 @@
+# ==========================================
+# 🔧 WINDOWS FIX
+# ==========================================
+import pathlib
+pathlib.PosixPath = pathlib.WindowsPath
+
+# ==========================================
+# 📦 IMPORTS
+# ==========================================
+from flask import Flask, request, jsonify, render_template_string
+import torch
+import cv2
+import threading
+from collections import deque
+from datetime import datetime
+
+# ==========================================
+# 🚀 FLASK APP
+# ==========================================
+app = Flask(__name__)
+
+# ==========================================
+# 👷 WORKER DATABASE
+# ==========================================
+workers = {
+    "62 EA 3D 5C": "SCHWARZENEGGER",
+    "F3 9F 50 06": "KIMIYETO",
+    "62 FD 10 5C": "HEONG",
+    "F3 97 EC 05": "KOMAL"
+}
+
+worker_locations = {}
+worker_last_seen = {}
+active_workers = {}
+
+latest_status = {
+    "worker": "WAITING",
+    "helmet": False,
+    "vest": False,
+    "decision": "WAITING",
+    "location": "---",
+    "reason": "---",
+    "last_seen": "---"
+}
+
+# ==========================================
+# 🧠 LOAD YOLO MODEL
+# ==========================================
+model = torch.hub.load(
+    './yolov5',
+    'custom',
+    path='best.pt',
+    source='local'
+)
+model.conf = 0.25
+
+# Class name sets - adjust these if your model uses different label names.
+# Run print(df['name'].tolist()) once to confirm exact class names.
+HELMET_LABELS = {"hat"}
+NO_HELMET_LABELS = {"no_hat", "no-hat"}
+VEST_LABELS = {"vest"}
+NO_VEST_LABELS = {"no_vest", "no-vest"}
+PERSON_LABELS = {"person", "human", "worker"}
+
+# Only consider PPE detections whose box overlaps a detected person
+def filter_to_person_boxes(df):
+    person_boxes = df[df['name'].str.lower().isin(PERSON_LABELS)]
+    if person_boxes.empty:
+        return df  # no person class in model, or none detected - skip filtering
+    ppe_rows = df[~df['name'].str.lower().isin(PERSON_LABELS)]
+    keep = []
+    for _, prow in ppe_rows.iterrows():
+        for _, hrow in person_boxes.iterrows():
+            ix1 = max(prow['xmin'], hrow['xmin'])
+            iy1 = max(prow['ymin'], hrow['ymin'])
+            ix2 = min(prow['xmax'], hrow['xmax'])
+            iy2 = min(prow['ymax'], hrow['ymax'])
+            if ix2 > ix1 and iy2 > iy1:
+                keep.append(prow)
+                break
+    import pandas as pd
+    return pd.DataFrame(keep) if keep else df.iloc[0:0]
+
+ppe_status = {
+    "helmet": False,
+    "vest": False
+}
+
+tunnel_status = {
+    "workers_detected": 0,
+    "status": "SAFE",
+    "message": "NO WORKERS DETECTED"
+}
+
+lock = threading.Lock()
+helmet_buffer = deque(maxlen=5)
+vest_buffer = deque(maxlen=5)
+logs = []
+
+# ==========================================
+# HTML DASHBOARD
+# ==========================================
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+<title>Guardian Platform</title>
+<meta http-equiv="refresh" content="1">
+<style>
+body{ background:#0f172a; color:white; font-family:Arial; padding:30px; }
+.card{ background:#1e293b; padding:25px; border-radius:25px; margin-bottom:20px; }
+.good{ color:#22c55e; font-size:35px; font-weight:bold; }
+.bad{ color:#ef4444; font-size:35px; font-weight:bold; }
+.warning{ color:#facc15; font-size:35px; font-weight:bold; }
+.tracking{ color:#3b82f6; font-size:35px; font-weight:bold; }
+</style>
+</head>
+<body>
+<h1>🛡 Guardian Platform</h1>
+<div class="card">
+<h2>👷 Worker</h2>
+<h1>{{worker}}</h1>
+<p><b>Location:</b> {{location}}</p>
+<p><b>Last Seen:</b> {{last_seen}}</p>
+</div>
+<div class="card">
+<h2>🦺 Entrance PPE Camera</h2>
+<p>Helmet: {% if helmet %}✅ DETECTED{% else %}❌ MISSING{% endif %}</p>
+<p>Vest: {% if vest %}✅ DETECTED{% else %}❌ MISSING{% endif %}</p>
+</div>
+<div class="card">
+<h2>⛏ Tunnel 1 Camera</h2>
+<p><b>Workers Detected:</b> {{workers_detected}}</p>
+<p><b>Status:</b> {{status}}</p>
+<div style="color:#facc15; font-size:20px; font-weight:bold;">{{message}}</div>
+</div>
+<div class="card">
+<h2>🚪 Access & Tracking</h2>
+{% if decision == "ALLOW" %} <div class="good">✅ ACCESS APPROVED</div>
+{% elif decision == "DENY" %} <div class="bad">❌ ACCESS DENIED</div>
+{% elif decision == "WARNING" %} <div class="warning">⚠ WARNING!</div>
+{% else %} <div class="tracking">📍 ACTIVE IN ZONE</div> {% endif %}
+<p><b>Details:</b> {{reason}}</p>
+</div>
+<div class="card">
+<h2>📜 Activity Feed</h2>
+{% for log in logs %} <p>{{log}}</p> {% endfor %}
+</div>
+</body>
+</html>
+"""
+
+# ==========================================
+# 🎥 ENTRANCE CAMERA
+# ==========================================
+def run_entrance_ai():
+    entrance_cam = cv2.VideoCapture(3, cv2.CAP_DSHOW)
+    if not entrance_cam.isOpened():
+        print("❌ ENTRANCE CAMERA FAILED")
+        return
+
+    print("🎥 ENTRANCE CAMERA STARTED")
+    while True:
+        ret, frame = entrance_cam.read()
+        if not ret: continue
+        results = model(frame, size=640)
+        frame_draw = results.render()[0].copy()
+
+        try:
+            df = results.pandas().xyxy[0]
+            df = filter_to_person_boxes(df)
+            labels = set(x.lower() for x in df['name'].tolist())
+        except:
+            labels = set()
+
+        helmet = bool(labels & HELMET_LABELS)
+        vest = bool(labels & VEST_LABELS)
+        if labels & NO_HELMET_LABELS: helmet = False
+        if labels & NO_VEST_LABELS: vest = False
+
+        helmet_buffer.append(helmet)
+        vest_buffer.append(vest)
+
+        with lock:
+            ppe_status["helmet"] = sum(helmet_buffer) >= 3
+            ppe_status["vest"] = sum(vest_buffer) >= 3
+
+        cv2.imshow("Entrance PPE Camera", frame_draw)
+        if cv2.waitKey(1) == 27: break
+    entrance_cam.release()
+
+# ==========================================
+# 🎥 TUNNEL CAMERA
+# ==========================================
+def run_tunnel1_ai():
+    tunnel1_cam = cv2.VideoCapture(2, cv2.CAP_DSHOW)
+    if not tunnel1_cam.isOpened():
+        print("❌ TUNNEL 1 CAMERA FAILED")
+        return
+
+    print("🎥 TUNNEL 1 CAMERA STARTED")
+    while True:
+        ret, frame = tunnel1_cam.read()
+        if not ret: continue
+        frame = cv2.convertScaleAbs(frame, alpha=1.2, beta=20)
+        results = model(frame, size=640)
+        frame_draw = results.render()[0].copy()
+
+        try:
+            df = results.pandas().xyxy[0]
+            df = filter_to_person_boxes(df)
+            labels = set(x.lower() for x in df['name'].tolist())
+        except:
+            labels = set()
+
+        # Count head-related and body-related detections (PPE present OR violation)
+        head_count = sum(1 for l in labels if l in HELMET_LABELS or l in NO_HELMET_LABELS)
+        body_count = sum(1 for l in labels if l in VEST_LABELS or l in NO_VEST_LABELS)
+        workers_detected = max(head_count, body_count)
+        if workers_detected == 0 and len(labels) > 0: workers_detected = 1
+
+        helmet = bool(labels & HELMET_LABELS)
+        vest = bool(labels & VEST_LABELS)
+        if labels & NO_HELMET_LABELS: helmet = False
+        if labels & NO_VEST_LABELS: vest = False
+
+        rfid_workers = [name for name, loc in worker_locations.items() if "TUNNEL" in loc.upper()]
+        rfid_count = len(rfid_workers)
+        text_color = (0, 255, 0)
+
+        if workers_detected > 0:
+            if not helmet and not vest:
+                tunnel_message = "DANGER: NO HELMET & NO VEST"
+                tunnel_state = "DANGER"
+                text_color = (0, 0, 255)
+            elif not helmet:
+                tunnel_message = "WARNING: NO HELMET"
+                tunnel_state = "WARNING"
+                text_color = (0, 255, 255)
+            elif not vest:
+                tunnel_message = "WARNING: NO VEST"
+                tunnel_state = "WARNING"
+                text_color = (0, 255, 255)
+            else:
+                tunnel_message = "SAFE: ALL CLEAR"
+                tunnel_state = "SAFE"
+
+            if rfid_count > 0:
+                tunnel_message += f" | RFID: {', '.join(rfid_workers)}"
+        elif rfid_count > 0:
+            tunnel_message = f"[RFID] TRACKING: {', '.join(rfid_workers)}"
+            tunnel_state = "SAFE"
+            workers_detected = rfid_count
+            text_color = (255, 255, 0)
+        else:
+            tunnel_message = "NO WORKERS DETECTED"
+            tunnel_state = "SAFE"
+
+        with lock:
+            tunnel_status["workers_detected"] = workers_detected
+            tunnel_status["status"] = tunnel_state
+            tunnel_status["message"] = tunnel_message
+
+        cv2.putText(frame_draw, tunnel_message, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 3)
+        cv2.imshow("Tunnel 1 Camera", frame_draw)
+        if cv2.waitKey(1) == 27: break
+    tunnel1_cam.release()
+
+@app.route("/")
+def home():
+    return render_template_string(HTML, **latest_status, logs=logs[-20:], **tunnel_status)
+
+@app.route('/rfid', methods=['POST'])
+def rfid():
+    global latest_status
+    data = request.json
+    uid = data.get('uid', 'UNKNOWN')
+    location = "ENTRANCE" if data.get('location') == "ENTRY" else data.get('location', 'UNKNOWN')
+    worker_name = workers.get(uid, "UNKNOWN WORKER")
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    worker_locations[worker_name] = location
+    worker_last_seen[worker_name] = current_time
+
+    with lock:
+        helmet, vest = ppe_status["helmet"], ppe_status["vest"]
+
+    if location == "ENTRANCE":
+        if helmet and vest:
+            decision, reason = "ALLOW", "SAFE TO ENTER"
+        elif not helmet and not vest:
+            decision, reason = "DENY", "NO HELMET & NO VEST"
+        elif not helmet:
+            decision, reason = "DENY", "NO HELMET"
+        else:
+            decision, reason = "DENY", "NO VEST"
+    else:
+        if tunnel_status["status"] in ["WARNING", "DANGER"]:
+            decision, reason = "WARNING", f"PPE VIOLATION IN {location}"
+        else:
+            decision, reason = "TRACKING", f"ACTIVE IN {location}"
+
+    response = {
+        "worker": worker_name, "location": location, "decision": decision,
+        "helmet": helmet, "vest": vest, "reason": reason, "last_seen": current_time
+    }
+    active_workers[worker_name] = response
+    latest_status = response
+    logs.append(f"{worker_name} | {location} | {decision}")
+    if len(logs) > 100: logs[:] = logs[-100:]
+    return jsonify(response)
+
+@app.route('/status', methods=['GET'])
+def get_status(): return jsonify(latest_status)
+
+@app.route('/workers', methods=['GET'])
+def get_workers():
+    return jsonify([{"worker": k, "location": v.get("location"), "last_seen": v.get("last_seen")} for k, v in active_workers.items()])
+
+@app.route('/risk', methods=['GET'])
+def get_risk():
+    risks = [{"message": tunnel_status["message"]}] if tunnel_status["status"] in ["WARNING", "DANGER"] else []
+    return jsonify({"risks": risks})
+
+@app.route('/map', methods=['GET'])
+def get_map():
+    tunnel_map = {}
+    for name, data in active_workers.items():
+        loc = data.get("location", "UNKNOWN")
+        tunnel_map.setdefault(loc, []).append({"worker": name, "last_seen": data.get("last_seen")})
+    return jsonify(tunnel_map)
+
+if __name__ == "__main__":
+    print("================================\n🛡 GUARDIAN SERVER STARTED\n================================")
+    threading.Thread(target=run_entrance_ai, daemon=True).start()
+    threading.Thread(target=run_tunnel1_ai, daemon=True).start()
+    app.run(host="0.0.0.0", port=5000, debug=False)

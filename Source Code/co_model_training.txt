@@ -1,0 +1,171 @@
+# CO Random Forest Model Training and Monitoring Guide
+
+This guide contains the step-by-step code blocks required to train a Carbon Monoxide (CO) predictive model and the script for real-time monitoring via ThingSpeak.
+
+---
+
+### Step 1: Upload Dataset and Load Data
+Run this block in Google Colab to upload your dataset (`Indoor Air Pollution_Data.csv`) and load it into a pandas DataFrame.
+
+```python
+from google.colab import files
+import pandas as pd
+
+# Upload the CSV file
+uploaded = files.upload()
+
+# Load the dataset
+df = pd.read_csv("Indoor Air Pollution_Data.csv")
+print(df.head())
+```
+
+---
+
+### Step 2: Data Preprocessing
+Extract the CO feature, handle missing values, and create a binary label (1 if CO > 5.0, else 0).
+
+```python
+# Select CO column and drop missing values
+df = df[['CO']].dropna()
+
+# Create target label based on safe limits
+df['label'] = (df['CO'] > 5.0).astype(int)
+
+# Define Features (X) and Target (y)
+X = df[['CO']]
+y = df['label']
+
+print(f"Dataset shape after preprocessing: {X.shape}")
+```
+
+---
+
+### Step 3: Train Random Forest Model
+Split the dataset and train the Random Forest Classifier.
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Initialize and train the model
+model = RandomForestClassifier(
+    n_estimators=200,
+    random_state=42
+)
+model.fit(X_train, y_train)
+
+print("Model training completed.")
+```
+
+---
+
+### Step 4: Evaluate Model
+Evaluate the model's accuracy on the test set.
+
+```python
+from sklearn.metrics import accuracy_score, classification_report
+
+# Predict on the test set
+pred = model.predict(X_test)
+
+# Print metrics
+print("Accuracy:", accuracy_score(y_test, pred))
+print("\nClassification Report:\n", classification_report(y_test, pred))
+```
+
+---
+
+### Step 5: Save & Download Model
+Save the trained model and download it to your local machine.
+
+```python
+import joblib
+from google.colab import files
+
+# Save the model
+joblib.dump(model, "co_rf_model.pkl")
+
+# Download the model
+files.download("co_rf_model.pkl")
+```
+
+---
+---
+
+### Real-time Monitoring Script (ThingSpeak)
+Use this script locally or in a deployed environment to fetch live ThingSpeak data and monitor it using the trained AI model. Ensure `co_rf_model.pkl` is in the same directory as this script.
+
+```python
+import requests
+import joblib
+import time
+
+# =============================
+# 🔧 CHANNEL CONFIG (READ ONLY)
+# =============================
+CHANNEL_ID = "3278460"
+READ_API_KEY = "2BJ2XCV2BRMDF1PW"
+
+FETCH_URL = f"https://api.thingspeak.com/channels/{CHANNEL_ID}/fields/3.json?api_key={READ_API_KEY}&results=1"
+
+# =============================
+# 🧠 LOAD MODEL
+# =============================
+# Load the pre-trained model
+try:
+    model = joblib.load("co_rf_model.pkl")
+    print("✅ Guardian CO AI Monitor Started (READ ONLY)")
+except Exception as e:
+    print(f"❌ Failed to load model: {e}")
+    exit()
+
+# =============================
+# 🔁 LIVE LOOP
+# =============================
+while True:
+    try:
+        res = requests.get(FETCH_URL, timeout=10)
+        data = res.json()
+
+        if "feeds" not in data or len(data["feeds"]) == 0:
+            print("⚠️ Waiting for CO data...")
+            time.sleep(17)
+            continue
+
+        feed = data["feeds"][-1]
+
+        try:
+            co = float(feed["field3"])
+        except:
+            print("⚠️ Invalid CO value")
+            time.sleep(17)
+            continue
+
+        # ⭐ RULE-BASED SAFETY LEVEL
+        if co < 100:
+            status = "SAFE"
+        elif co < 500:
+            status = "CAUTION"
+        else:
+            status = "DANGER"
+
+        # ⭐ ML ANOMALY DETECTION
+        anomaly = int(model.predict([[co]])[0])
+
+        print("\n==============================")
+        print(f"CO Concentration : {co:.2f} ppm")
+        print(f"Safety Status    : {status}")
+        print(f"AI Anomaly Flag  : {anomaly}")
+        print("==============================")
+
+    except Exception as e:
+        print("❌ System Error:", e)
+
+    # ThingSpeak safe interval
+    time.sleep(17)
+```

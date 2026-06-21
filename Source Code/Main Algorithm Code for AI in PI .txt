@@ -1,0 +1,711 @@
+# ==============================================
+# GUARDIAN EDGE AI SERVER
+# SYNCHRONIZED SENSOR + RFID + EXPOSURE TRACKING
+# ==============================================
+
+from flask import Flask, request, jsonify
+import sqlite3
+from datetime import datetime
+import joblib
+import time
+import requests
+
+app = Flask(__name__)
+
+# ==============================================
+# SENSOR DATA (Pre-populated to show UI structure)
+# ==============================================
+tunnel_sensor_data = {
+    "ENTRANCE": {
+        "temperature": 0.0,
+        "humidity": 0.0,
+        "co": 0.0,
+        "ch4": 0.0,
+        "vibration": 0.0,       
+        "accelerometer": 0.0,   
+        "status": "WAITING FOR ESP32",
+        "advice": "System booting. Awaiting telemetry...",
+        "node_name": "NODE 1"
+    },
+    "TUNNEL 1": {
+        "temperature": 0.0,
+        "humidity": 0.0,
+        "co": 0.0,
+        "ch4": 0.0,
+        "status": "WAITING FOR ESP32",
+        "advice": "System booting. Awaiting telemetry...",
+        "node_name": "NODE 2"
+    }
+}
+
+# ==============================================
+# LIVE WORKERS & TIMERS
+# ==============================================
+worker_locations = {}
+worker_last_seen = {}
+worker_entry_time = {}
+worker_hazard_start_time = {}  
+
+# ==============================================
+# ALERTS
+# ==============================================
+exposure_alerts = []
+latest_sos = {
+    "active": False,
+    "worker": "",
+    "location": "",
+    "time": ""
+}
+current_alert = None
+
+# ==============================================
+# EMERGENCY & WARNING STATES
+# ==============================================
+
+emergency_data = {
+    "active": False,
+    "type": "",
+    "worker": "",
+    "location": "",
+    "ack": False 
+}
+
+# NEW: AI Warning state (Human-in-the-loop)
+ai_warning = {
+    "active": False,
+    "type": "",
+    "location": "",
+    "details": ""
+}
+
+# ==============================================
+# HAZARD RULES
+# ==============================================
+hazard_rules = {
+    "vibration": {
+        "threshold": 0.5, 
+        "warning": "STRUCTURAL INSTABILITY",
+        "advice": "Dangerous vibration levels detected. Potential collapse risk."
+    },
+    "accelerometer": {
+        "threshold": 60.0, 
+        "warning": "SEISMIC ANOMALY",
+        "advice": "Sudden structural shift or impact detected."
+    },
+    "co": {
+        "threshold": 250,
+        "warning": "HIGH CO RISK",
+        "advice": "Dangerous carbon monoxide exposure."
+    },
+    "ch4": {
+        "threshold": 500,
+        "warning": "HIGH METHANE RISK",
+        "advice": "Methane levels dangerously high."
+    },
+    "temperature": {
+        "threshold": 40,
+        "warning": "HIGH TEMPERATURE",
+        "advice": "Temperature exceeds safe levels."
+    },
+    "humidity": {
+        "threshold": 70,
+        "warning": "HIGH HUMIDITY",
+        "advice": "Humidity above safe limits."
+    }
+}
+
+# ==============================================
+# DATABASE
+# ==============================================
+DB_NAME = "guardian_history.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sensor_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tunnel TEXT,
+        temperature REAL,
+        humidity REAL,
+        co REAL,
+        ch4 REAL,
+        vibration REAL,      
+        accelerometer REAL,  
+        status TEXT,
+        advice TEXT,
+        timestamp TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# ==============================================
+# LOAD AI MODEL
+# ==============================================
+print("Loading Structural AI Model...")
+try:
+    structure_model = joblib.load("building_health_model.pkl")
+    print("Structural AI Model Loaded!")
+except Exception as e:
+    print("Warning: Could not load building_health_model.pkl ->", e)
+
+NODE_TUNNELS = {
+    1: "ENTRANCE",
+    2: "TUNNEL 1"
+}
+
+def save_data(tunnel, temp, hum, co, ch4, vib, acc, status, advice):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+    INSERT INTO sensor_history (
+        tunnel, temperature, humidity, co, ch4, vibration, accelerometer, status, advice, timestamp
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        tunnel, temp, hum, co, ch4, vib, acc, status, advice,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
+    conn.commit()
+    conn.close()
+
+# ==============================================
+# EXPOSURE TRACKING ENGINE
+# ==============================================
+def process_exposure_alerts():
+    global exposure_alerts
+    exposure_alerts.clear()
+    
+    current_time = time.time()
+
+    for worker, tunnel in worker_locations.items():
+        if tunnel not in tunnel_sensor_data:
+            continue
+
+        sensor = tunnel_sensor_data[tunnel]
+        
+        if sensor["status"] != "SAFE" and sensor["status"] != "WAITING FOR ESP32":
+            if worker not in worker_hazard_start_time:
+                worker_hazard_start_time[worker] = current_time
+            
+            exposure_duration = current_time - worker_hazard_start_time[worker]
+            
+            if exposure_duration >= 20:
+                exposure_alerts.append(
+                    f"CRITICAL: {worker} exposed to {sensor['status']} in {tunnel} for {int(exposure_duration)} seconds!"
+                )
+        else:
+            if worker in worker_hazard_start_time:
+                del worker_hazard_start_time[worker]
+
+# ==============================================
+# DASHBOARD
+# ==============================================
+@app.route('/')
+def dashboard():
+    try:
+        response = requests.get(
+            "https://unfarcical-don-bilgiest.ngrok-free.dev/status",
+            timeout=2
+        )
+        status_data = response.json()
+        worker = status_data.get("worker")
+        location = status_data.get("location")
+        last_seen = status_data.get("last_seen")
+
+        worker_locations.clear()
+        worker_last_seen.clear()
+
+        if worker != "WAITING":
+            worker_locations[worker] = location
+            worker_last_seen[worker] = last_seen
+            if worker not in worker_entry_time:
+                worker_entry_time[worker] = time.time()
+
+    except Exception as e:
+        print("STATUS FETCH ERROR:", e)
+
+    process_exposure_alerts()
+
+    html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Guardian Live Monitor</title>
+        <meta http-equiv="refresh" content="3">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+        <style>
+            :root {
+                --bg-main: #020617;
+                --bg-card: #0F172A;
+                --border-color: #1E293B;
+                --text-main: #F8FAFC;
+                --text-muted: #94A3B8;
+                --accent: #38BDF8;
+                --safe: #22C55E;
+                --safe-bg: rgba(34, 197, 94, 0.15);
+                --danger: #EF4444;
+                --danger-bg: rgba(239, 68, 68, 0.15);
+                --warning: #FBBF24;
+                --warning-bg: rgba(251, 191, 36, 0.15);
+            }
+            body { background: var(--bg-main); color: var(--text-main); font-family: 'Inter', sans-serif; margin: 0; padding: 40px 20px; line-height: 1.5; }
+            .header-container { max-width: 1200px; margin: 0 auto 30px auto; text-align: center; }
+            h1 { color: var(--accent); font-weight: 800; letter-spacing: -0.5px; margin: 0; }
+            .subtitle { color: var(--text-muted); font-size: 14px; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
+            .grid-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; max-width: 1200px; margin: 0 auto; }
+            .card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 16px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+            .card-full { grid-column: 1 / -1; }
+            h2 { font-size: 18px; margin: 0 0 20px 0; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+            .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed var(--border-color); }
+            .stat-row:last-child { border-bottom: none; }
+            .stat-label { color: var(--text-muted); font-size: 14px; font-weight: 600; }
+            .stat-value { font-weight: 600; font-size: 15px; }
+            .badge { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; }
+            .badge.safe { background: var(--safe-bg); color: var(--safe); border: 1px solid rgba(34, 197, 94, 0.3); }
+            .badge.danger { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+            .badge.warning { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(251, 191, 36, 0.3); }
+            .advice-text { margin-top: 15px; font-size: 13px; color: var(--text-muted); font-style: italic; }
+            .worker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px;}
+            .worker-dot { height: 10px; width: 10px; background-color: var(--safe); border-radius: 50%; }
+        </style>
+    
+<script>
+function sendCommand(cmd){
+fetch('/send-alert',{
+method:'POST',
+headers:{'Content-Type':'application/json'},
+body:JSON.stringify({alert:cmd})
+})
+.then(response => response.json())
+.then(data => { alert("Command Sent: " + cmd); })
+.catch(error => { alert("Failed to send command"); });
+}
+</script>
+
+</head>
+    <body>
+        <div class="header-container">
+            <h1>GUARDIAN COMMAND</h1>
+            <div class="subtitle">Live Edge AI Telemetry</div>
+        </div>
+        <div class="grid-container">
+    """
+    
+    # ==========================================
+    # RED: FULL EMERGENCY BANNER (Takes priority)
+    # ==========================================
+    if emergency_data["active"]:
+        ack_status_html = "<span style='color: var(--safe); font-weight: 800;'>✅ ACKNOWLEDGED BY WORKER</span>" if emergency_data.get("ack") else "<span style='color: var(--warning); font-weight: 800;'>⏳ WAITING FOR WORKER ACKNOWLEDGMENT...</span>"
+        
+        html += f"""
+        <div class="card card-full" style="border: 2px solid var(--danger); background: var(--danger-bg); text-align: center;">
+            <h2 style="color: var(--danger); justify-content: center; border-bottom: none; font-size: 24px; margin-bottom: 10px;">🚨 EMERGENCY ACTIVE: {emergency_data['type']} 🚨</h2>
+            <div style="font-size: 16px; margin-bottom: 15px; color: var(--text-main);">Target: <strong>{emergency_data['worker']}</strong> | Zone: <strong>{emergency_data['location']}</strong></div>
+            <div style="font-size: 18px; margin-bottom: 20px; background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; display: inline-block;">
+                {ack_status_html}
+            </div>
+            <br>
+            <button onclick="fetch('/clear_emergency', {{method:'POST'}}).then(()=>location.reload())" style="background:var(--danger);color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-weight:bold;font-size:14px; text-transform: uppercase;">Clear Emergency State</button>
+        </div>
+        """
+    # ==========================================
+    # YELLOW: AI WARNING BANNER (Requires Supervisor Action)
+    # ==========================================
+    elif ai_warning["active"]:
+        html += f"""
+        <div class="card card-full" style="border: 2px solid var(--warning); background: var(--warning-bg); text-align: center;">
+            <h2 style="color: var(--warning); justify-content: center; border-bottom: none; font-size: 24px; margin-bottom: 10px;">⚠️ AI SYSTEM WARNING ⚠️</h2>
+            <div style="font-size: 16px; margin-bottom: 15px; color: var(--text-main);">Zone: <strong>{ai_warning['location']}</strong> | Detected: <strong>{ai_warning['type']}</strong></div>
+            <div style="font-size: 14px; margin-bottom: 20px; color: var(--text-muted);">{ai_warning['details']}</div>
+            
+            <button onclick="fetch('/elevate_warning', {{method:'POST'}}).then(()=>location.reload())" style="background:var(--danger);color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-weight:bold;margin-right:10px;">TRIGGER EVACUATION</button>
+            
+            <button onclick="fetch('/dismiss_warning', {{method:'POST'}}).then(()=>location.reload())" style="background:#475569;color:white;padding:12px 24px;border:none;border-radius:8px;cursor:pointer;font-weight:bold;">DISMISS WARNING</button>
+        </div>
+        """
+
+    html += """
+<div class="card">
+<h2>SUPERVISOR COMMANDS</h2>
+<button onclick="sendCommand('ALERT:EVACUATE')" style="background:#EF4444;color:white;padding:12px 18px;border:none;border-radius:8px;margin:5px;cursor:pointer;font-weight:bold;">EVACUATE</button>
+<button onclick="sendCommand('ALERT:GAS_LEAK')" style="background:#F59E0B;color:white;padding:12px 18px;border:none;border-radius:8px;margin:5px;cursor:pointer;font-weight:bold;">GAS LEAK</button>
+<button onclick="sendCommand('ALERT:COLLAPSE')" style="background:#9333EA;color:white;padding:12px 18px;border:none;border-radius:8px;margin:5px;cursor:pointer;font-weight:bold;">COLLAPSE</button>
+<button onclick="sendCommand('ALERT:HIGH_TEMP')" style="background:#DC2626;color:white;padding:12px 18px;border:none;border-radius:8px;margin:5px;cursor:pointer;font-weight:bold;">HIGH TEMP</button>
+</div>
+    """
+
+    for tunnel, sensor in tunnel_sensor_data.items():
+        status_class = "safe"
+        if sensor["status"] == "WAITING FOR ESP32":
+            status_class = "warning"
+        elif sensor["status"] != "SAFE":
+            status_class = "danger"
+
+        html += f"""
+        <div class="card">
+            <h2>📍 {tunnel}</h2>
+            <div class="stat-row"><span class="stat-label">TEMP</span><span class="stat-value">{sensor["temperature"]}&deg;C</span></div>
+            <div class="stat-row"><span class="stat-label">HUMIDITY</span><span class="stat-value">{sensor["humidity"]} %</span></div>
+            <div class="stat-row"><span class="stat-label">CO</span><span class="stat-value">{sensor["co"]} ppm</span></div>
+            <div class="stat-row"><span class="stat-label">CH4</span><span class="stat-value">{sensor["ch4"]} ppm</span></div>
+        """
+        
+        if "vibration" in sensor:
+            html += f'<div class="stat-row"><span class="stat-label">VIBRATION</span><span class="stat-value">{sensor["vibration"]} mm/s</span></div>'
+        if "accelerometer" in sensor:
+            html += f'<div class="stat-row"><span class="stat-label">ACCELEROMETER</span><span class="stat-value">{sensor["accelerometer"]} m/s²</span></div>'
+
+        html += f"""
+            <div class="stat-row" style="margin-top: 10px; border-bottom: none;">
+                <span class="stat-label">SYSTEM STATUS</span>
+                <span class="badge {status_class}">{sensor["status"]}</span>
+            </div>
+            <div class="advice-text">AI Analysis: {sensor["advice"]}</div>
+        </div>
+        """
+
+    html += """<div class="card"><h2>ACTIVE PERSONNEL</h2>"""
+    if len(worker_locations) == 0:
+        html += '<p style="color: var(--text-muted);">No active workers logged in zones.</p>'
+    else:
+        for worker, tunnel in worker_locations.items():
+            last_seen = worker_last_seen.get(worker, "UNKNOWN")
+            html += f"""
+            <div class="worker-row">
+                <div class="worker-dot"></div>
+                <div style="flex-grow: 1;">
+                    <div style="font-weight: 600;">{worker}</div>
+                    <div style="font-size: 12px; color: var(--text-muted);">📍 {tunnel}</div>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); text-align: right;">LAST SEEN<br>{last_seen}</div>
+            </div>"""
+    html += "</div>"
+
+    html += """<div class="card"><h2>LIVE RISK PREDICTION</h2>"""
+    risk_found = False
+    for worker, tunnel in worker_locations.items():
+        if tunnel not in tunnel_sensor_data: continue
+        sensor = tunnel_sensor_data[tunnel]
+
+        if sensor["status"] != "SAFE" and sensor["status"] != "WAITING FOR ESP32":
+            risk_found = True
+            current_exposure = int(time.time() - worker_hazard_start_time.get(worker, time.time()))
+            html += f"""
+            <div style="padding: 12px; background: var(--danger-bg); border-left: 4px solid var(--danger); border-radius: 4px; margin-bottom: 10px;">
+                <div style="color: var(--danger); font-weight: 600; font-size: 14px;">Hazard Warning</div>
+                <div style="font-size: 13px; margin-top: 4px;"><strong>{worker}</strong> is exposed to <strong>{sensor["status"]}</strong> in {tunnel}.</div>
+                <div style="font-size: 12px; margin-top: 4px; color: #F87171;">Exposure Duration: {current_exposure}s</div>
+            </div>"""
+
+    if not risk_found:
+        html += '<div style="padding: 12px; background: var(--safe-bg); border-radius: 4px; color: var(--safe); font-weight: 600;">All personnel are currently in safe zones.</div>'
+    
+    html += "</div>"
+
+    html += """<div class="card card-full" style="border-color: rgba(239, 68, 68, 0.3);"><h2>
+CRITICAL ALERTS LOG</h2>"""
+    if len(exposure_alerts) == 0:
+        html += '<p style="color: var(--text-muted);">No critical alerts triggered. (Limit: 20s)</p>'
+    else:
+        for alert in exposure_alerts:
+            html += f'<div style="padding: 16px; background: #7F1D1D; color: white; font-weight: 800; border-radius: 8px; margin-bottom: 10px; border-left: 8px solid #DC2626;">{alert}</div>'
+            
+    html += """</div></div></body></html>"""
+
+    return html
+
+# ==============================================
+# SENSOR PREDICTION
+# ==============================================
+@app.route('/predict', methods=['POST'])
+def predict():
+    try:
+        global ai_warning, emergency_data 
+        
+        data = request.get_json(force=True)
+        print("\nReceived:", data)
+
+        node_id = int(data.get('id', 0))
+        tunnel = NODE_TUNNELS.get(node_id, "UNKNOWN")
+
+        temp = float(data.get('temperature', 0))
+        hum = float(data.get('humidity', 0))
+        co = float(data.get('co', 0))
+        ch4 = float(data.get('ch4', 0))
+        
+        vib = float(data.get('sw420', 0))       
+        acc = float(data.get('magnitude', 0))  
+
+        final_status = "SAFE"
+        advice = "Environmental conditions stable."
+
+        # ======================================
+        # HAZARD CHECKS (Prioritized)
+        # ======================================
+        if vib > hazard_rules["vibration"]["threshold"]:            
+            final_status = hazard_rules["vibration"]["warning"]
+            advice = hazard_rules["vibration"]["advice"]
+        elif acc > hazard_rules["accelerometer"]["threshold"]:       
+            final_status = hazard_rules["accelerometer"]["warning"]
+            advice = hazard_rules["accelerometer"]["advice"]
+        elif co > hazard_rules["co"]["threshold"]:
+            final_status = hazard_rules["co"]["warning"]
+            advice = hazard_rules["co"]["advice"]
+        elif ch4 > hazard_rules["ch4"]["threshold"]:
+            final_status = hazard_rules["ch4"]["warning"]
+            advice = hazard_rules["ch4"]["advice"]
+        elif temp > hazard_rules["temperature"]["threshold"]:
+            final_status = hazard_rules["temperature"]["warning"]
+            advice = hazard_rules["temperature"]["advice"]
+        elif hum > hazard_rules["humidity"]["threshold"]:
+            final_status = hazard_rules["humidity"]["warning"]
+            advice = hazard_rules["humidity"]["advice"]
+
+        # ======================================
+        # NEW: AI WARNING LOGIC (Supervisor Approval Needed)
+        # ======================================
+        # Only trigger a warning if an emergency isn't ALREADY active, and a warning isn't already showing
+        if final_status != "SAFE" and not emergency_data["active"] and not ai_warning["active"]:
+            ai_warning = {
+                "active": True,
+                "type": final_status,
+                "location": tunnel,
+                "details": f"AI detected {final_status}. {advice}"
+            }
+            print("================================")
+            print(f"⚠️ AI WARNING GENERATED: {final_status}. Awaiting Supervisor Action.")
+            print("================================")
+
+        # ======================================
+        # UPDATE SENSOR DATA
+        # ======================================
+        node_payload = {
+            "temperature": temp,
+            "humidity": hum,
+            "co": co,
+            "ch4": ch4,
+            "status": final_status,
+            "advice": advice,
+            "node_name": f"NODE {node_id}"
+        }
+        
+        if node_id == 1:
+            node_payload["vibration"] = vib
+            node_payload["accelerometer"] = acc
+
+        tunnel_sensor_data[tunnel] = node_payload
+
+        # ======================================
+        # SAVE DATABASE
+        # ======================================
+        save_data(tunnel, temp, hum, co, ch4, vib, acc, final_status, advice)
+
+        return jsonify({
+            "tunnel": tunnel,
+            "status": final_status,
+            "advice": advice
+        })
+
+    except Exception as e:
+        print("SERVER ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/data')
+def data(): return jsonify(tunnel_sensor_data)
+
+@app.route('/risk')
+def risk():
+    risks = []
+    for worker, tunnel in worker_locations.items():
+        if tunnel not in tunnel_sensor_data: continue
+        sensor = tunnel_sensor_data[tunnel]
+        if sensor["status"] != "SAFE" and sensor["status"] != "WAITING FOR ESP32":
+            risks.append({"message": f"{worker} exposed to {sensor['status']} in {tunnel}"})
+    if len(risks) == 0: risks.append({"message": "NO ACTIVE RISKS"})
+    return jsonify({"risks": risks})
+
+@app.route('/map')
+def tunnel_map():
+    tunnels = {"ENTRANCE": [], "TUNNEL 1": []}
+    for worker, tunnel in worker_locations.items():
+        if tunnel not in tunnels: tunnels[tunnel] = []
+        tunnels[tunnel].append({"worker": worker, "last_seen": worker_last_seen.get(worker, "UNKNOWN")})
+    return jsonify(tunnels)
+
+# ==============================================
+# SOS RECEIVER 
+# ==============================================
+@app.route('/receive-sos', methods=['POST'])
+def receive_sos():
+    global emergency_data
+    data = request.get_json()
+    worker = data.get("worker", "UNKNOWN")
+
+    YOLO_NGROK_URL = "https://unfarcical-don-bilgiest.ngrok-free.dev"
+    location = "UNKNOWN"
+
+    try:
+        url = f"{YOLO_NGROK_URL}/workers"
+        response = requests.get(url, timeout=2)
+        
+        if response.status_code == 200:
+            workers_list = response.json()
+            for w in workers_list:
+                if w["worker"] == worker:
+                    location = w["location"]
+                    break
+    except Exception as e:
+        print("? FAILED TO FETCH LOCATION FROM YOLO SERVER:", e)
+        location = worker_locations.get(worker, "UNKNOWN")
+
+    emergency_data = {
+        "active": True,
+        "type": "SOS",
+        "worker": worker,
+        "location": location,
+        "ack": False 
+    }
+
+    print("================================")
+    print(f"?? SOS RECEIVED: {worker}")
+    print(f"?? LOCATION: {location}")
+    print("================================")
+
+    return jsonify({"status": "success"})
+
+# ==============================================
+# ACKNOWLEDGMENT RECEIVER
+# ==============================================
+@app.route('/receive-ack', methods=['POST'])
+def receive_ack():
+    global emergency_data
+    data = request.get_json()
+    worker = data.get("worker", "UNKNOWN")
+    
+    if emergency_data["active"]:
+        emergency_data["ack"] = True
+        
+    print("================================")
+    print(f"✅ DASHBOARD: ACK RECEIVED FROM {worker}")
+    print("================================")
+    
+    return jsonify({"status": "success"})
+
+
+# ==============================================
+# NEW: WARNING CONTROL ENDPOINTS
+# ==============================================
+@app.route('/elevate_warning', methods=['POST'])
+def elevate_warning():
+    global ai_warning, emergency_data, current_alert
+    
+    if ai_warning["active"]:
+        # 1. Update the emergency state so the red banner shows
+        emergency_data = {
+            "active": True,
+            "type": f"AI ALERT: {ai_warning['type']}",
+            "worker": "ALL ZONES",
+            "location": ai_warning['location'],
+            "ack": False
+        }
+        # 2. Add the alert to the LoRa queue to broadcast to the ESP8266 nodes
+        current_alert = f"ALERT:{ai_warning['type'].replace(' ', '_')}"
+        
+        # 3. Clear the warning so the yellow banner disappears
+        ai_warning["active"] = False 
+        
+        print(f"🚨 WARNING ELEVATED: {current_alert} BROADCASTED")
+        
+    return jsonify({"status": "elevated"})
+
+@app.route('/dismiss_warning', methods=['POST'])
+def dismiss_warning():
+    global ai_warning
+    # Just clear the state and let the sensors reset it if the hazard continues
+    ai_warning = {
+        "active": False,
+        "type": "",
+        "location": "",
+        "details": ""
+    }
+    print("✅ WARNING DISMISSED BY SUPERVISOR")
+    return jsonify({"status": "dismissed"})
+
+# ==============================================
+# GENERAL ENDPOINTS
+# ==============================================
+@app.route('/get-sos')
+def get_sos():
+    return jsonify(latest_sos)
+
+@app.route('/send-alert', methods=['POST'])
+def send_alert():
+    global current_alert, emergency_data
+    current_alert = request.get_json().get('alert')
+    
+    if not emergency_data["active"]:
+        emergency_data = {
+            "active": True,
+            "type": f"MANUAL COMMAND: {current_alert.replace('ALERT:', '')}",
+            "worker": "ALL ZONES",
+            "location": "N/A",
+            "ack": False
+        }
+        
+    print("ALERT CREATED:", current_alert)
+    return jsonify({"status":"success"})
+
+@app.route('/get-alert')
+def get_alert():
+    global current_alert
+    alert = current_alert
+    current_alert = None
+    return jsonify({"alert": alert})
+
+@app.route('/fetch_workers')
+def fetch_workers():
+    try:
+        response = requests.get("https://unfarcical-don-bilgiest.ngrok-free.dev/status", timeout=2)
+        data = response.json()
+        worker_locations.clear()
+        if data.get("worker") != "WAITING":
+            worker_locations[data.get("worker")] = data.get("location")
+    except Exception as e:
+        print("FETCH WORKER ERROR:", e)
+    return jsonify(worker_locations)
+
+@app.route('/emergency')
+def emergency():
+    return jsonify(emergency_data)
+
+@app.route('/clear_emergency', methods=['POST'])
+def clear_emergency():
+    global emergency_data
+    emergency_data = {
+        "active": False,
+        "type": "",
+        "worker": "",
+        "location": "",
+        "ack": False 
+    }
+    print("================================")
+    print("EMERGENCY CLEARED")
+    print("================================")
+    return jsonify({"status": "cleared"})
+
+# ==============================================
+# START SERVER
+# ==============================================
+if __name__ == "__main__":
+    print("================================")
+    print(" GUARDIAN EDGE SERVER STARTED")
+    print("================================")
+    app.run(host="0.0.0.0", port=5001, debug=False)

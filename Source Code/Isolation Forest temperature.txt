@@ -1,0 +1,204 @@
+# Mine Environment Safety Isolation Forest Guide
+
+This guide covers inspecting historical data, synthesizing safety-aligned data based on Indonesian standards, training a model, and executing real-time cloud monitoring.
+
+---
+
+### Step 1: Upload & Inspect Data Center Dataset
+Use this step to upload a generic dataset and visually confirm the presence of temperature/humidity columns.
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import files
+sns.set(style="whitegrid")
+
+# Upload File
+print("📂 Please upload your CSV file")
+uploaded = files.upload()
+fname = list(uploaded.keys())[0]
+df = pd.read_csv(fname)
+
+print(f"\n✅ Shape: {df.shape[0]} rows × {df.shape[1]} columns")
+print(df.head())
+
+# Auto-detect columns
+temp_cols = [c for c in df.columns if 'temp' in c.lower()]
+hum_cols  = [c for c in df.columns if 'hum' in c.lower()]
+print("\n🌡️ Detected temp columns:", temp_cols)
+print("💧 Detected hum columns:", hum_cols)
+```
+
+---
+
+### Step 2: Visualize Temperature Behavior
+Run this to create charts that map Ambient Temperature vs Outlet Temperature to understand existing patterns before synthesizing mine data.
+
+```python
+# Assuming specific column names exist in your uploaded CSV
+temp_main = "Outlet_Temperature(°C)"
+temp_env  = "Ambient_Temperature(°C)"
+
+plt.figure(figsize=(12,4))
+sns.histplot(df[temp_main], bins=50, kde=True, color='orange', label=temp_main)
+sns.histplot(df[temp_env], bins=50, kde=True, color='blue', label=temp_env)
+plt.legend()
+plt.title("Temperature Distributions")
+plt.show()
+
+plt.figure(figsize=(6,6))
+sns.scatterplot(x=df[temp_env], y=df[temp_main], alpha=0.6)
+plt.title("Ambient vs. Outlet Temperature")
+plt.show()
+```
+
+---
+
+### Step 3: Create Synthetic Mine Dataset (Safety Aligned)
+Generates a new synthesized dataset simulating normal Indonesian mine conditions (Temp ≤ 32°C, Humidity ≤ 65%) with injected failure scenarios.
+
+```python
+import pandas as pd
+import numpy as np
+
+n = 3500
+np.random.seed(42)
+
+# Safe conditions
+safe_temp = np.clip(np.random.normal(30, 1.5, n), 26, 32)
+safe_hum = np.clip(np.random.normal(60, 3, n), 50, 65)
+
+# Inject Danger/Anomalies
+anomaly_indices = np.random.choice(n, size=60, replace=False)
+danger_temp, danger_hum = safe_temp.copy(), safe_hum.copy()
+
+danger_temp[anomaly_indices] += np.random.normal(5, 1.2, len(anomaly_indices))
+danger_hum[anomaly_indices]  += np.random.normal(10, 2.5, len(anomaly_indices))
+
+danger_temp = np.clip(danger_temp, 26, 45)
+danger_hum = np.clip(danger_hum, 50, 95)
+temp_deviation = np.abs(danger_temp - np.mean(danger_temp)) * np.random.uniform(0.8, 1.2, n)
+
+# Save
+df_mine = pd.DataFrame({
+    "Ambient_Temperature(°C)": danger_temp,
+    "Humidity(%)": danger_hum,
+    "Temperature_Deviation(°C)": temp_deviation
+})
+
+df_mine.to_csv("mine_environment_dataset_safety.csv", index=False)
+print("✅ Synthetic Mine Dataset Saved.")
+```
+
+---
+
+### Step 4: Train Isolation Forest (Safety Compliant)
+Trains the AI to distinguish between the generated safe parameters and dangerous anomalies.
+
+```python
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+import joblib
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("mine_environment_dataset_safety.csv")
+X = df[["Ambient_Temperature(°C)", "Humidity(%)"]].values
+
+# Scale & Train
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+model = IsolationForest(contamination=0.02, random_state=42)
+model.fit(X_scaled)
+
+# Visualize
+df["Anomaly"] = (model.predict(X_scaled) == -1).astype(int)
+plt.figure(figsize=(10,5))
+plt.scatter(df.index, df["Ambient_Temperature(°C)"], c=df["Anomaly"], cmap="coolwarm", s=12)
+plt.title("Mine Safety — Isolation Forest Anomaly Detection")
+plt.colorbar(label="1=Danger, 0=Safe")
+plt.show()
+
+# Save & Download
+joblib.dump((model, scaler), "mine_safety_isolation_forest.pkl")
+from google.colab import files
+files.download("mine_safety_isolation_forest.pkl")
+```
+
+---
+---
+
+### Real-Time Mine Monitoring via ThingSpeak
+Run this script locally to fetch real telemetry from your mine hardware, pass it to the model, and push an advanced hazard analysis back to the cloud.
+
+```python
+import requests
+import joblib
+import time
+
+# ==========================
+# 🔧 CONFIGURATION
+# ==========================
+READ_API_KEY = "2BJ2XCV2BRMDF1PW"
+WRITE_API_KEY = "TI6FUHXJEVJ4OBXR"
+CHANNEL_ID = "3278460"
+
+FETCH_URL = f"https://api.thingspeak.com/channels/{CHANNEL_ID}/feeds.json?api_key={READ_API_KEY}&results=1"
+UPDATE_URL = f"https://api.thingspeak.com/update?api_key={WRITE_API_KEY}"
+
+# ==========================
+# 🧠 LOAD MODEL
+# ==========================
+try:
+    model, scaler = joblib.load("mine_safety_isolation_forest.pkl")
+    print("✅ Model and scaler loaded.\n🚀 Guardian Monitor Started...")
+except Exception as e:
+    print(f"❌ Failed to load model: {e}")
+    exit()
+
+last_temp = last_hum = last_state = None
+
+while True:
+    try:
+        res = requests.get(FETCH_URL, timeout=10)
+        data = res.json()
+
+        if "feeds" not in data or not data["feeds"]:
+            time.sleep(17)
+            continue
+
+        feed = data["feeds"][-1]
+        temp = float(feed["field1"])
+        hum = float(feed["field2"])
+
+        # ⭐ AI Prediction
+        X_scaled = scaler.transform([[temp, hum]])
+        anomaly = int(model.predict(X_scaled)[0] == -1)
+
+        # ⭐ Professional Safety Status Logic
+        if anomaly == 0:
+            status_text = "NORMAL ENVIRONMENT"
+        else:
+            if temp > 45 or hum > 90:
+                status_text = "CRITICAL ENVIRONMENTAL CONDITION"
+            elif temp > 35 or hum > 75:
+                status_text = "POTENTIAL HAZARD BUILDUP"
+            else:
+                status_text = "ENVIRONMENTAL INSTABILITY DETECTED"
+
+        print(f"\nTemp: {temp:.2f}°C | Hum: {hum:.2f}% | Status: {status_text}")
+
+        # ⭐ Cloud Update
+        if (temp, hum, anomaly) != (last_temp, last_hum, last_state):
+            payload = {"field1": temp, "field2": hum, "field3": anomaly}
+            r = requests.get(UPDATE_URL, params=payload, timeout=10)
+            if r.status_code == 200 and r.text.strip() != "0":
+                print("☁️ Cloud status updated")
+                last_temp, last_hum, last_state = temp, hum, anomaly
+
+    except Exception as e:
+        print("❌ Error:", e)
+
+    time.sleep(17)
+```

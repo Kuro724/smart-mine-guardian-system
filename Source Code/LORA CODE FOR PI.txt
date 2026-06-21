@@ -1,0 +1,206 @@
+from SX127x.LoRa import *
+from SX127x.board_config import BOARD
+import time
+import requests
+
+# ============================================
+# FLASK SERVER ENDPOINTS
+# ============================================
+SERVER_URL = "http://127.0.0.1:5001/predict"
+SOS_URL = "http://127.0.0.1:5001/receive-sos"
+GET_ALERT_URL = "http://127.0.0.1:5001/get-alert"
+ACK_URL = "http://127.0.0.1:5001/receive-ack"  # <-- NEW ENDPOINT FOR ACK
+
+BOARD.setup()
+
+# ============================================
+# LORA RECEIVER & TRANSMITTER
+# ============================================
+class LoRaReceiver(LoRa):
+
+    def __init__(self):
+        super(LoRaReceiver, self).__init__(verbose=False)
+        print("Configuring LoRa...")
+        self.set_mode(MODE.SLEEP)
+        time.sleep(0.1)
+        self.set_dio_mapping([0, 0, 0, 0, 0, 0])
+
+        # ============================================
+        # MATCH ESP32 SETTINGS
+        # ============================================
+        self.set_freq(433.0)
+        self.set_bw(BW.BW125)
+        self.set_spreading_factor(7)
+        self.set_coding_rate(CODING_RATE.CR4_5)
+        self.set_preamble(8)
+        self.set_sync_word(0x12)
+        self.reset_ptr_rx()
+        self.set_pa_config(pa_select=1)
+        self.set_pa_config(pa_select=1, output_power=15)
+        print("LoRa Config Done")
+
+    # ============================================
+    # START RECEIVER
+    # ============================================
+    def start(self):
+        print("================================")
+        print(" GUARDIAN GATEWAY READY ")
+        print("================================")
+        self.set_mode(MODE.RXCONT)
+
+    # ============================================
+    # TRANSMIT ALERTS (SUPERVISOR -> WORKER)
+    # ============================================
+    def transmit_alert(self, message):
+        print("================================")
+        print(f" BROADCASTING ALERT: {message}")
+        print("================================")
+
+        try:
+            self.set_mode(MODE.STDBY)
+            time.sleep(0.1)
+            payload = [ord(c) for c in message]
+            print("PAYLOAD:", payload)
+            self.write_payload(payload)
+            print("TX START")
+            self.set_mode(MODE.TX)
+            time.sleep(2)
+            print("TX DONE")
+        except Exception as e:
+            print("TX ERROR:", e)
+        finally:
+            self.set_mode(MODE.STDBY)
+            self.reset_ptr_rx()
+            self.set_mode(MODE.RXCONT)
+
+    # ============================================
+    # RECEIVE PACKETS
+    # ============================================
+    def on_rx_done(self):
+        try:
+            self.clear_irq_flags(RxDone=1)
+            self.set_mode(MODE.STDBY)
+            current_addr = self.get_fifo_rx_current_addr()
+            self.set_fifo_addr_ptr(current_addr)
+            packet_size = self.get_rx_nb_bytes()
+            payload = self.read_payload(nocheck=True)
+            
+            raw = bytes(payload[:packet_size]).decode("utf-8", errors="ignore").strip()
+            print("\nRAW:", raw)
+
+            # ===========================================
+            # SOS EMERGENCY HANDLER
+            # ===========================================
+            if raw.startswith("SOS:"):
+                worker = raw.replace("SOS:", "")
+                print("================================")
+                print(" EMERGENCY SOS RECEIVED! ")
+                print(" WORKER:", worker)
+                print("================================")
+                try:
+                    requests.post(SOS_URL, json={"worker": worker}, timeout=5)
+                except Exception as e:
+                    print("SOS SERVER ERROR:", e)
+                self.reset_ptr_rx()
+                self.set_mode(MODE.RXCONT)
+                return
+
+            # ===========================================
+            # ACKNOWLEDGMENT HANDLER (NEW)
+            # ===========================================
+            elif raw.startswith("ACK:"):
+                worker = raw.replace("ACK:", "")
+                print("================================")
+                print(f" ACK RECEIVED FROM WORKER: {worker} ")
+                print("================================")
+                try:
+                    requests.post(ACK_URL, json={"worker": worker}, timeout=5)
+                except Exception as e:
+                    print("ACK SERVER ERROR:", e)
+                self.reset_ptr_rx()
+                self.set_mode(MODE.RXCONT)
+                return
+
+            # ============================================
+            # EXISTING TELEMETRY LOGIC
+            # ============================================
+            parts = raw.split(",")
+
+            if len(parts) not in [5, 11]:
+                print("BAD PACKET")
+                print("Received:", len(parts))
+                self.reset_ptr_rx()
+                self.set_mode(MODE.RXCONT)
+                return
+
+            if len(parts) == 11:
+                data = {
+                    "id": int(parts[0]),
+                    "accel_x": float(parts[1]),
+                    "accel_y": float(parts[2]),
+                    "accel_z": float(parts[3]),
+                    "magnitude": float(parts[4]),
+                    "rolling_mean": float(parts[5]),
+                    "sw420": int(parts[6]),
+                    "temperature": float(parts[7]),
+                    "humidity": float(parts[8]),
+                    "co": float(parts[9]),
+                    "ch4": float(parts[10])
+                }
+                print("================================")
+                print("NODE 1 DETECTED - STRUCTURAL NODE")
+                print("================================")
+            else:
+                data = {
+                    "id": int(parts[0]),
+                    "temperature": float(parts[1]),
+                    "humidity": float(parts[2]),
+                    "co": float(parts[3]),
+                    "ch4": float(parts[4]),
+                    "accel_x": 0, "accel_y": 0, "accel_z": 0,
+                    "magnitude": 0, "rolling_mean": 0, "sw420": 0
+                }
+                print("================================")
+                print("NODE 2 DETECTED - ENVIRONMENT NODE")
+                print("================================")
+
+            print(data)
+
+            try:
+                response = requests.post(SERVER_URL, json=data, timeout=5)
+                print("\nAI RESPONSE:")
+                print(response.text)
+            except Exception as e:
+                print("SERVER ERROR:", e)
+            print("================================")
+
+        except Exception as e:
+            print("RX ERROR:", e)
+        finally:
+            self.reset_ptr_rx()
+            self.set_mode(MODE.RXCONT)
+
+# ============================================
+# MAIN THREAD
+# ============================================
+lora = LoRaReceiver()
+lora.start()
+
+try:
+    while True:
+        # Check for outgoing alerts every 2 seconds
+        try:
+            res = requests.get(GET_ALERT_URL, timeout=2)
+            if res.status_code == 200:
+                alert_data = res.json()
+                if alert_data.get("alert"):
+                    lora.transmit_alert(alert_data["alert"])
+        except requests.exceptions.RequestException:
+            pass # Ignore connection errors if Flask isn't up yet
+        time.sleep(2)
+
+except KeyboardInterrupt:
+    print("Stopping...")
+finally:
+    lora.set_mode(MODE.SLEEP)
+    BOARD.teardown()

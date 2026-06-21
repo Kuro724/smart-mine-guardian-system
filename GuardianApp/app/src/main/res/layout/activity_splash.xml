@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#000000">
+
+    <ImageView
+        android:layout_width="180dp"
+        android:layout_height="180dp"
+        android:src="@drawable/guardian_logo1"
+        android:contentDescription="Guardian Logo" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/guardian_platform"
+        android:textColor="#FFFFFF"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginTop="20dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/safety_monitoring"
+        android:textColor="#AAAAAA"
+        android:textSize="16sp"
+        android:layout_marginTop="8dp" />
+
+</LinearLayout>

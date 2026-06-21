@@ -1,0 +1,250 @@
+nstall Required Libraries
+# Install the latest YOLOv8 package
+pip install ultralytics
+
+# Install PyTorch
+pip install torch torchvision
+
+# Install OpenCV for webcam and video processing
+pip install opencv-python
+2. Training Script (train.py)
+# Import the YOLO class from Ultralytics
+from ultralytics import YOLO
+
+
+# Main function
+def main():
+
+    # --------------------------------------------------
+    # Load a pretrained YOLOv8 Medium model
+    #
+    # Options:
+    # yolov8n.pt = Nano (Fastest)
+    # yolov8s.pt = Small
+    # yolov8m.pt = Medium
+    # yolov8l.pt = Large
+    # yolov8x.pt = Extra Large (Most Accurate)
+    # --------------------------------------------------
+    model = YOLO("yolov8m.pt")
+
+
+    # --------------------------------------------------
+    # Train the model
+    # --------------------------------------------------
+    model.train(
+
+        # Location of the dataset configuration file
+        data="PPE-Verification/data.yaml",
+
+        # Number of complete passes through the dataset
+        epochs=100,
+
+        # Resize every image to 640x640
+        imgsz=640,
+
+        # Number of images processed before updating weights
+        batch=16,
+
+        # Number of CPU workers loading images
+        workers=8,
+
+        # GPU device
+        # device=0 -> First GPU
+        # device="cpu" -> CPU only
+        device=0,
+
+        # Folder where results are saved
+        project="Mining_PPE",
+
+        # Name of this training run
+        name="YOLOv8_PPE",
+
+        # Optimizer
+        optimizer="AdamW",
+
+        # Initial learning rate
+        lr0=0.001,
+
+        # Regularization to reduce overfitting
+        weight_decay=0.0005,
+
+        # Stop training if validation doesn't improve
+        patience=20,
+
+        # Cosine learning rate scheduler
+        cos_lr=True,
+
+        # ---------------------------------------
+        # Data Augmentation
+        # ---------------------------------------
+
+        # Random hue adjustment
+        hsv_h=0.015,
+
+        # Random saturation adjustment
+        hsv_s=0.7,
+
+        # Random brightness adjustment
+        hsv_v=0.4,
+
+        # Rotate image randomly
+        degrees=5,
+
+        # Translate image
+        translate=0.1,
+
+        # Random zoom
+        scale=0.5,
+
+        # Horizontal flip probability
+        fliplr=0.5,
+
+        # Mosaic augmentation
+        mosaic=1.0,
+
+        # MixUp augmentation
+        mixup=0.1,
+
+        # Save best weights
+        save=True,
+
+        # Print training information
+        verbose=True
+    )
+
+
+# Run the main function
+if __name__ == "__main__":
+    main()
+3. Dataset Configuration (data.yaml)
+# Root directory of the dataset
+path: PPE-Verification
+
+# Training images
+train: train/images
+
+# Validation images
+val: valid/images
+
+# Test images
+test: test/images
+
+# Object classes
+names:
+
+  # Class 0
+  0: helmet
+
+  # Class 1
+  1: vest
+
+  # Class 2
+  2: gloves
+
+  # Class 3
+  3: boots
+
+  # Class 4
+  4: goggles
+
+  # Class 5
+  5: person
+4. Evaluate Model (evaluate.py)
+# Import YOLO
+from ultralytics import YOLO
+
+
+# Load trained weights
+model = YOLO("Mining_PPE/YOLOv8_PPE/weights/best.pt")
+
+
+# Evaluate on validation dataset
+metrics = model.val()
+
+
+# Print evaluation metrics
+print(metrics)
+5. Predict an Image (predict.py)
+# Import YOLO
+from ultralytics import YOLO
+
+
+# Load trained model
+model = YOLO("Mining_PPE/YOLOv8_PPE/weights/best.pt")
+
+
+# Perform prediction
+results = model.predict(
+
+    # Image to predict
+    source="test.jpg",
+
+    # Confidence threshold
+    conf=0.4,
+
+    # Save output image
+    save=True
+)
+
+# Print prediction results
+print(results)
+6. Real-Time Webcam Detection (webcam.py)
+# OpenCV for webcam
+import cv2
+
+# YOLO
+from ultralytics import YOLO
+
+
+# Load trained model
+model = YOLO("Mining_PPE/YOLOv8_PPE/weights/best.pt")
+
+
+# Open webcam
+cap = cv2.VideoCapture(0)
+
+
+# Keep reading webcam frames
+while True:
+
+    # Read one frame
+    ret, frame = cap.read()
+
+    # Stop if frame cannot be read
+    if not ret:
+        break
+
+    # Detect PPE objects
+    results = model(frame)
+
+    # Draw boxes and labels
+    annotated = results[0].plot()
+
+    # Show results
+    cv2.imshow("Mining PPE Detection", annotated)
+
+    # Press q to exit
+    if cv2.waitKey(1) == ord('q'):
+        break
+
+
+# Release webcam
+cap.release()
+
+# Close all OpenCV windows
+cv2.destroyAllWindows()
+7. Export Model to ONNX (export.py)
+# Import YOLO
+from ultralytics import YOLO
+
+
+# Load trained model
+model = YOLO("Mining_PPE/YOLOv8_PPE/weights/best.pt")
+
+
+# Export model to ONNX format
+model.export(format="onnx")
+
+8. Run Training
+# Execute the training script
+python train.py

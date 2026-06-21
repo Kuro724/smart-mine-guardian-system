@@ -1,0 +1,226 @@
+# Methane Isolation Forest Model Training and Monitoring Guide
+
+This guide provides the steps to train an Anomaly Detection model (Isolation Forest) based on Methane and Temperature data, along with a live monitoring script.
+
+---
+
+### Step 1: Mount Drive and Load Data
+Connect to Google Drive and load the methane dataset.
+
+```python
+from google.colab import drive
+import pandas as pd
+
+# Mount Google Drive
+drive.mount('/content/drive')
+
+# Load dataset
+df = pd.read_csv("/content/drive/MyDrive/methane/methane_sampled.csv")
+print(df.head())
+```
+
+---
+
+### Step 2: Scale Data and Train Isolation Forest
+Select the features (`WM868` for Methane, `TP1721` for Temperature), scale them, and train the anomaly detector.
+
+```python
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+
+# Select features
+X = df[['WM868', 'TP1721']]
+
+# Scale data
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Train Isolation Forest
+iso_model = IsolationForest(
+    n_estimators=200,
+    contamination=0.05,   # 5% anomalies expected
+    random_state=42
+)
+
+iso_model.fit(X_scaled)
+
+# Map anomalies (1 = Normal, -1 = Anomaly -> mapped to 0=Normal, 1=Anomaly)
+df['anomaly'] = iso_model.predict(X_scaled)
+df['anomaly'] = df['anomaly'].map({1: 0, -1: 1})
+
+print("Isolation Forest model training complete.")
+```
+
+---
+
+### Step 3: Visualize Anomalies
+Plot the detected anomalies to verify the model's behavior.
+
+```python
+import matplotlib.pyplot as plt
+
+normal = df[df['anomaly'] == 0]
+anomaly = df[df['anomaly'] == 1]
+
+plt.figure(figsize=(10, 6))
+plt.scatter(normal['WM868'], normal['TP1721'], s=5, label='Normal')
+plt.scatter(anomaly['WM868'], anomaly['TP1721'], s=10, color='red', label='Anomaly')
+plt.xlabel('Methane (WM868)')
+plt.ylabel('Temperature (TP1721)')
+plt.legend()
+plt.title('Isolation Forest – Anomaly Detection')
+plt.show()
+```
+
+---
+
+### Step 4: Save & Download Model
+Save the trained model and scaler, and download them for deployment.
+
+```python
+import joblib
+from google.colab import files
+
+# Save files to drive
+joblib.dump(iso_model, "/content/drive/MyDrive/methane/isolation_forest_ch4_temp.pkl")
+joblib.dump(scaler, "/content/drive/MyDrive/methane/scaler.pkl")
+
+# Save files locally for download
+joblib.dump(iso_model, "methane_model.pkl")
+joblib.dump(scaler, "methane_scaler.pkl")
+
+# Download files
+files.download("methane_model.pkl")
+files.download("methane_scaler.pkl")
+
+print("✅ Model and scaler saved and ready for download.")
+```
+
+---
+
+### Step 5: Test Prediction Function (Optional)
+Run this block to test a single prediction using the loaded model.
+
+```python
+import joblib
+import pandas as pd
+
+# Load files
+model = joblib.load("/content/drive/MyDrive/methane/isolation_forest_ch4_temp.pkl")
+scaler = joblib.load("/content/drive/MyDrive/methane/scaler.pkl")
+
+def predict_status(methane, temp):
+    X = pd.DataFrame([[methane, temp]], columns=['WM868', 'TP1721'])
+    X_scaled = scaler.transform(X)
+    result = model.predict(X_scaled)
+    return "ANOMALY 🚨" if result[0] == -1 else "NORMAL ✅"
+
+# Test a sample value
+print("Test Prediction (Methane=900, Temp=27.5):", predict_status(900, 27.5))
+```
+
+---
+---
+
+### Real-time Monitoring Script (ThingSpeak)
+Run this script in a local Python environment. It fetches live data from ThingSpeak and feeds it to the Isolation Forest model. Ensure your `pkl` files are correctly referenced.
+
+```python
+import requests
+import pandas as pd
+import joblib
+import time
+
+# =============================
+# 🧠 LOAD MODEL & SCALER
+# =============================
+# Update these paths to where you saved the files locally
+MODEL_PATH = "methane_model.pkl" # Adjust path as necessary
+SCALER_PATH = "methane_scaler.pkl" # Adjust path as necessary
+
+try:
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    print("✅ Model & scaler loaded successfully")
+except Exception as e:
+    print(f"❌ Failed to load model/scaler: {e}")
+    exit()
+
+# =============================
+# 🔧 THINGSPEAK CONFIG
+# =============================
+CHANNEL_ID = "3278460"
+READ_API_KEY = "2BJ2XCV2BRMDF1PW"
+url = f"https://api.thingspeak.com/channels/{CHANNEL_ID}/feeds/last.json?api_key={READ_API_KEY}"
+
+# Logic configuration
+BASELINE_METHANE = 400
+HAZARD_DELTA = 300
+ANOMALY_CONFIRMATION = 3
+
+anomaly_count = 0
+last_time = None
+
+print("🚀 Starting real-time Methane monitoring...")
+
+# =============================
+# 🔁 LIVE LOOP
+# =============================
+while True:
+    try:
+        response = requests.get(url, timeout=10)
+        feed = response.json()
+
+        if 'created_at' not in feed:
+            print("No new data...")
+            time.sleep(5)
+            continue
+
+        timestamp = feed['created_at']
+
+        # Skip if same data already processed
+        if timestamp == last_time:
+            time.sleep(5)
+            continue
+
+        last_time = timestamp
+
+        temperature = feed.get('field1')
+        methane = feed.get('field4')
+
+        if methane is None or temperature is None:
+            time.sleep(5)
+            continue
+
+        methane = float(methane)
+        temperature = float(temperature)
+
+        print(f"\nTime: {timestamp}")
+        print(f"Methane: {methane:.2f}, Temperature: {temperature:.2f}")
+
+        # Prediction
+        X = pd.DataFrame([[methane, temperature]], columns=['WM868', 'TP1721'])
+        X_scaled = scaler.transform(X)
+        prediction = model.predict(X_scaled)
+
+        if prediction[0] == -1:
+            anomaly_count += 1
+            print("⚠️ ANOMALOUS PATTERN DETECTED")
+
+            if methane > BASELINE_METHANE + HAZARD_DELTA:
+                print("⚠️ POTENTIAL HAZARD: HIGH METHANE")
+            else:
+                print("ANOMALY IS NON-HAZARDOUS")
+        else:
+            anomaly_count = 0
+            print("STATUS: NORMAL ✅")
+
+        if anomaly_count >= ANOMALY_CONFIRMATION and methane > BASELINE_METHANE + HAZARD_DELTA:
+            print("🚨 CONFIRMED HAZARDOUS CONDITION DETECTED")
+            anomaly_count = 0
+
+    except Exception as e:
+        print("Error:", e)
+
+    time.sleep(5) # Polling interval
+```

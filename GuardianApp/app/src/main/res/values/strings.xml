@@ -1,0 +1,13 @@
+<resources>
+
+    <string name="app_name">Guardian</string>
+
+    <string name="guardian_platform">
+        Guardian Platform
+    </string>
+
+    <string name="safety_monitoring">
+        Safety &amp; Monitoring System
+    </string>
+
+</resources>

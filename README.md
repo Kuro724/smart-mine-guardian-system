@@ -1,3 +1,12 @@
+<img width="503" height="691" alt="Picture3_p0_i0 jpeg safe" src="https://github.com/user-attachments/assets/c5fd6d47-3c97-4734-8b3d-b98718b8b473" />
+<img width="494" height="951" alt="Picture3_p1_i0 jpeg safe" src="https://github.com/user-attachments/assets/0e89acf6-c0d5-4f2d-a365-7465ea22e564" />
+<img width="540" height="500" alt="Picture3_p2_i0 jpeg safe" src="https://github.com/user-attachments/assets/b74d3569-363e-438c-ba40-e7c3b26b10c5" />
+<img width="497" height="629" alt="Picture3_p3_i0" src="https://github.com/user-attachments/assets/443c389a-d640-4323-8bad-d192f92a2eaa" />
+<img width="540" height="589" alt="Picture3_p11_i0" src="https://github.com/user-attachments/assets/e8b9a295-c053-407b-8bd4-4015098d0077" />
+<img width="510" height="852" alt="Picture3_p12_i0 jpeg safe" src="https://github.com/user-attachments/assets/0dd5c25a-dc19-4bf1-8452-cab88368ace4" />
+<img width="324" height="576" alt="Picture3_p7_i0" src="https://github.com/user-attachments/assets/1e98154e-c885-4eac-8078-eb4378ecd663" />
+<img width="540" height="1012" alt="Picture3_p5_i0" src="https://github.com/user-attachments/assets/dbaf8a2a-20cc-4938-8b91-2e61d7aca87a" />
+<img width="495" height="1012" alt="Picture3_p6_i0 jpeg safe" src="https://github.com/user-attachments/assets/eed6d6ce-c448-4b14-b82d-4a3b41d86490" />
 # Edge-Enabled Smart Mine Guardian System 🛡️
 
 > An edge-enabled **Cyber-Physical System (CPS)** for IIoT-based underground mine safety — real-time environmental monitoring, AI hazard detection, multi-camera PPE compliance, LoRa worker alerts, and a supervisor mobile app.

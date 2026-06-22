@@ -1,31 +1,14 @@
-## Project Overview
-
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/c5fd6d47-3c97-4734-8b3d-b98718b8b473" width="300"/>
-  <img src="https://github.com/user-attachments/assets/0e89acf6-c0d5-4f2d-a365-7465ea22e564" width="300"/>
+  <img src="https://github.com/user-attachments/assets/c5fd6d47-3c97-4734-8b3d-b98718b8b473" width="250"/>
+  <img src="https://github.com/user-attachments/assets/0e89acf6-c0d5-4f2d-a365-7465ea22e564" width="250"/>
+  <img src="https://github.com/user-attachments/assets/b74d3569-363e-438c-ba40-e7c3b26b10c5" width="250"/>
 </p>
 
----
-
-## System Architecture
-
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/b74d3569-363e-438c-ba40-e7c3b26b10c5" width="350"/>
-  <img src="https://github.com/user-attachments/assets/443c389a-d640-4323-8bad-d192f92a2eaa" width="350"/>
+  <img src="https://github.com/user-attachments/assets/443c389a-d640-4323-8bad-d192f92a2eaa" width="250"/>
+  <img src="https://github.com/user-attachments/assets/e8b9a295-c053-407b-8bd4-4015098d0077" width="250"/>
+  <img src="https://github.com/user-attachments/assets/0dd5c25a-dc19-4bf1-8452-cab88368ace4" width="250"/>
 </p>
-
----
-
-## Hardware Components
-
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/e8b9a295-c053-407b-8bd4-4015098d0077" width="300"/>
-  <img src="https://github.com/user-attachments/assets/0dd5c25a-dc19-4bf1-8452-cab88368ace4" width="300"/>
-</p>
-
----
-
-## Mobile Application
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/1e98154e-c885-4eac-8078-eb4378ecd663" width="250"/>
